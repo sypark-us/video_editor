@@ -1,0 +1,174 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Cutroom smoke test</title>
+<style>body{font:12px monospace;background:#111;color:#ddd;margin:0}#out{white-space:pre;padding:8px}iframe{width:1400px;height:900px;border:0;display:block}</style></head>
+<body>
+<div id="out">running…</div>
+<iframe id="f" src="../index.html"></iframe>
+<script type="module">
+const out = document.getElementById('out');
+const results = []; let errors = 0;
+const pass = (n) => { results.push('PASS ' + n); console.log('PASS ' + n); };
+const fail = (n, e) => { errors++; results.push('FAIL ' + n + ': ' + (e && e.stack || e)); console.log('FAIL ' + n + ': ' + e); };
+const ok = (cond, n) => (cond ? pass(n) : fail(n, 'assertion failed'));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const finish = () => { out.textContent = 'SMOKE-RESULTS\n' + results.join('\n') + `\nERRORS ${errors}`; };
+window.addEventListener('error', (e) => fail('uncaught', e.message));
+
+const f = document.getElementById('f');
+await new Promise((r) => { f.onload = r; });
+for (let i = 0; i < 50 && !f.contentWindow.app; i++) await sleep(100);
+const W = f.contentWindow, app = W.app, doc = W.document;
+const M = await import('../js/model.js');
+const { parseBoxes, findBox } = await import('../js/mp4mux.js');
+
+function wavFile(seconds = 2, freq = 440, rate = 48000) {
+  const n = seconds * rate, buf = new ArrayBuffer(44 + n * 2), dv = new DataView(buf);
+  const str = (o, s) => [...s].forEach((c, i) => dv.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, rate, true); dv.setUint32(28, rate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true); str(36, 'data'); dv.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) dv.setInt16(44 + i * 2, Math.sin((2 * Math.PI * freq * i) / rate) * 12000, true);
+  return new File([buf], 'tone.wav', { type: 'audio/wav' });
+}
+function pngFile(color = '#ff0000') {
+  const c = doc.createElement('canvas'); c.width = 320; c.height = 180; const g = c.getContext('2d'); g.fillStyle = color; g.fillRect(0, 0, 320, 180);
+  return new Promise((r) => c.toBlob((b) => r(new File([b], 'red.png', { type: 'image/png' }))));
+}
+async function webmFile() {
+  if (typeof W.MediaRecorder === 'undefined') return null;
+  const c = doc.createElement('canvas'); c.width = 160; c.height = 90; const g = c.getContext('2d');
+  const stream = c.captureStream(15); const rec = new W.MediaRecorder(stream, { mimeType: 'video/webm' }); const chunks = [];
+  rec.ondataavailable = (e) => chunks.push(e.data);
+  const done = new Promise((r) => { rec.onstop = r; });
+  rec.start(100);
+  const t0 = performance.now();
+  while (performance.now() - t0 < 1500) { g.fillStyle = `hsl(${(performance.now() - t0) / 5},80%,50%)`; g.fillRect(0, 0, 160, 90); await sleep(33); }
+  rec.stop(); await done;
+  return new File(chunks, 'clip.webm', { type: 'video/webm' });
+}
+function renderPixel(t, x, y) {
+  const cv = doc.createElement('canvas'); cv.width = app.project.width; cv.height = app.project.height;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  return app.player.seek(t).then(() => { app.compositor.render(ctx, app.project, t, app.player.getSource); return [...ctx.getImageData(x, y, 1, 1).data]; });
+}
+
+try {
+  ok(app && app.project && app.project.tracks.length === 6, 'app boots with 3 video + 3 audio tracks');
+  ok(doc.querySelectorAll('#trackHeaders .trackHead').length === 6, 'timeline renders track headers');
+
+  // import
+  const [img] = await app.importFiles([await pngFile()]);
+  ok(img && img.type === 'image' && img.width === 320, 'imports PNG image');
+  const [wav] = await app.importFiles([wavFile()]);
+  ok(wav && wav.type === 'audio' && Math.abs(wav.duration - 2) < 0.05, 'imports WAV audio with duration');
+  const peaks = await app.peaksFor(wav);
+  ok(peaks && peaks.length > 50 && Math.max(...peaks) > 0.2, 'computes waveform peaks');
+  const webm = await webmFile();
+  let vid = null;
+  if (webm) { [vid] = await app.importFiles([webm]); ok(vid && vid.type === 'video' && vid.duration > 0.5 && vid.width === 160, `imports recorded WebM video (dur ${vid && vid.duration.toFixed(2)})`); }
+  else results.push('SKIP MediaRecorder unavailable');
+  ok(doc.querySelectorAll('#mediaList .mediaItem').length === (vid ? 3 : 2), 'project bin lists media');
+
+  // clips
+  app.addMediaToTimeline(img.id, null, 0);
+  const imgClip = app.project.clips[0];
+  ok(imgClip && imgClip.kind === 'video' && imgClip.duration === 5, 'image becomes a 5 s video clip on V1');
+  app.addMediaToTimeline(wav.id, null, 0);
+  const audClip = app.project.clips.find((c) => c.kind === 'audio');
+  ok(audClip && M.trackById(app.project, audClip.trackId).kind === 'audio', 'audio file lands on an audio track');
+  if (vid) {
+    app.addMediaToTimeline(vid.id, null, 5);
+    const vc = app.project.clips.filter((c) => c.mediaId === vid.id);
+    ok(vc.length >= 1 && vc[0].start === 5, 'video clip placed at 5 s');
+  }
+  app.addTitle(1);
+  const title = app.project.clips.find((c) => c.kind === 'title');
+  ok(title && title.start === 1 && M.trackById(app.project, title.trackId).name === 'V2', 'title clip goes to a free upper track');
+  ok(doc.querySelectorAll('#tracks .clip').length === app.project.clips.length, 'timeline draws one element per clip');
+
+  // rendering
+  let px = await renderPixel(0.5, 10, 10);
+  ok(px[0] > 200 && px[1] < 50 && px[2] < 50, `renders red image frame (${px})`);
+  px = await renderPixel(2, 960, 540);
+  ok(px[0] > 200 && px[1] > 200 && px[2] > 200, `renders white title text over image (${px})`);
+  app.applyEffect('Black & White', [imgClip.id]);
+  px = await renderPixel(0.5, 10, 10);
+  ok(Math.abs(px[0] - px[1]) < 8 && Math.abs(px[1] - px[2]) < 8, `Black & White effect desaturates (${px})`);
+  app.undo();
+  ok(imgClip.effects.length === 0 || M.clipById(app.project, imgClip.id).effects.length === 0, 'undo removes effect');
+  const ic = M.clipById(app.project, imgClip.id);
+  app.edit('kf', () => { M.setKeyframe(ic, 'opacity', 0, 0); M.setKeyframe(ic, 'opacity', 4, 100); });
+  px = await renderPixel(2, 10, 10);
+  ok(px[0] > 90 && px[0] < 160, `opacity keyframes interpolate (${px})`);
+  app.edit('clear', () => M.clearKeyframes(ic, 'opacity'));
+  app.edit('crop', () => { ic.effects.push({ id: 'x', type: 'Crop', enabled: true, params: { left: 50, top: 0, right: 0, bottom: 0 } }); });
+  px = await renderPixel(0.5, 10, 10);
+  const px2 = await renderPixel(0.5, 1900, 10);
+  ok(px[0] < 10 && px2[0] > 200, `crop effect hides the left half (${px} / ${px2})`);
+  app.edit('uncrop', () => { ic.effects = []; });
+  if (vid) {
+    const vc = app.project.clips.find((c) => c.mediaId === vid.id && c.kind === 'video');
+    px = await renderPixel(5.5, 960, 540);
+    ok(px[0] + px[1] + px[2] > 100, `renders a frame from the recorded video (${px})`);
+    app.applyTransition('Cross Dissolve', [vc.id], 'in');
+    ok(M.transitionAt(app.project, vc.trackId, 5), 'transition registered at the cut');
+    px = await renderPixel(5, 10, 10);
+    ok(px[0] + px[1] + px[2] > 30, `renders mid-transition frame (${px})`);
+  }
+
+  // editing commands
+  app.select([ic.id]); app.setPlayhead(2); app.splitAtPlayhead();
+  const parts = app.project.clips.filter((c) => c.mediaId === img.id);
+  ok(parts.length === 2 && parts[0].duration === 2 && parts[1].start === 2 && parts[1].duration === 3, 'split at playhead');
+  app.select([parts[0].id]); app.deleteSelection(true);
+  const rest = app.project.clips.find((c) => c.mediaId === img.id);
+  ok(rest && rest.start === 0 && rest.duration === 3, 'ripple delete closes the gap');
+  app.undo(); app.undo();
+  ok(app.project.clips.filter((c) => c.mediaId === img.id).length === 1 && M.clipById(app.project, ic.id).duration === 5, 'double undo restores the unsplit clip');
+  app.redo();
+  ok(app.project.clips.filter((c) => c.mediaId === img.id).length === 2, 'redo re-applies the split');
+  app.select([ic.id]); app.copy(); app.setPlayhead(20); app.paste();
+  ok(app.project.clips.some((c) => c.mediaId === img.id && c.start === 20), 'copy/paste at playhead');
+  app.setSpeed(M.clipById(app.project, ic.id), 2);
+  ok(Math.abs(M.clipById(app.project, ic.id).duration - 1) < 1e-6, 'speed 200% halves the duration');
+  app.setPlayhead(0.5); app.select([ic.id]); app.trimToPlayhead('end');
+  ok(Math.abs(M.clipById(app.project, ic.id).duration - 0.5) < 1e-6, 'W ripple-trims end to playhead');
+  app.edit('marker', () => M.addMarker(app.project, 3, 'Scene'));
+  ok(app.project.markers.length === 1, 'markers');
+
+  // save / load round trip
+  const json = JSON.parse(JSON.stringify(M.serialize(app.project)));
+  const re = M.deserialize(json);
+  ok(re.clips.length === app.project.clips.length && re.media.length === app.project.media.length && !re.media[0].url, 'project serializes without blob URLs');
+
+  // playback
+  app.setPlayhead(0); app.play(1); await sleep(600);
+  const moved = app.playhead;
+  app.pause();
+  ok(moved > 0.3 && !app.player.playing, `playback advances the playhead (${moved.toFixed(2)} s)`);
+
+  // export
+  if (typeof W.VideoEncoder !== 'undefined') {
+    const { exportMp4 } = await import('../js/export.js');
+    try {
+      const blob = await exportMp4({ project: app.project, player: app.player, compositor: app.compositor, audio: app.audio, width: 320, height: 180, fps: 10, bitrate: 500000, t0: 0, t1: 1, includeAudio: true });
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const boxes = parseBoxes(bytes);
+      ok(blob.size > 500 && boxes.map((b) => b.type).join() === 'ftyp,moov,mdat', `exports MP4 via WebCodecs (${blob.size} bytes)`);
+      const traks = findBox(boxes, 'moov').children.filter((b) => b.type === 'trak');
+      ok(traks.length === 2, 'MP4 has video and audio tracks');
+      const stsz = findBox(boxes, 'moov/trak/mdia/minf/stbl/stsz');
+      ok(stsz && new DataView(bytes.buffer).getUint32(stsz.bodyStart + 8) === 10, 'MP4 has 10 video samples');
+      // Decode the file back with a <video> element to prove the container is valid.
+      const v = doc.createElement('video'); v.muted = true; v.src = URL.createObjectURL(blob);
+      await new Promise((r) => { v.onloadedmetadata = r; v.onerror = r; setTimeout(r, 5000); });
+      ok(Math.abs(v.duration - 1) < 0.15 && v.videoWidth === 320 && v.videoHeight === 180, `browser decodes exported MP4 (dur ${v.duration}, ${v.videoWidth}x${v.videoHeight})`);
+      v.currentTime = 0.25; await new Promise((r) => { v.onseeked = r; v.onerror = r; setTimeout(r, 5000); });
+      const cv = doc.createElement('canvas'); cv.width = 320; cv.height = 180; const g = cv.getContext('2d', { willReadFrequently: true }); g.drawImage(v, 0, 0);
+      const d = g.getImageData(2, 2, 1, 1).data;
+      ok(d[0] > 150 && d[1] < 90 && d[2] < 90, `decoded MP4 frame shows the red clip (${[...d]})`);
+    } catch (e) { fail('MP4 export', e); }
+  } else results.push('SKIP WebCodecs unavailable');
+} catch (e) { fail('EXCEPTION', e); }
+finish();
+</script>
+</body></html>

@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cutroom — browser video editor</title>
+<meta name="description" content="Free, local, browser-based non-linear video editor: multi-track timeline, effects, keyframes, transitions, titles, audio mixing and MP4 export.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%239a5cf6'/%3E%3Cpath d='M5 7h14v10H5z' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='M10 9.5v5l4-2.5z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+  <div id="menubar">
+    <span class="brand">Cut<span>room</span></span>
+    <div id="menus"></div>
+    <div class="spacer"></div>
+    <span id="projectName" class="projname" title="Double-click to rename">Untitled</span>
+    <button id="exportBtn" class="primary">Export</button>
+  </div>
+
+  <div id="workspace">
+    <div id="top">
+      <div id="leftPanel" class="panel">
+        <div class="tabs"><button class="tab active" data-tab="project">Project</button><button class="tab" data-tab="effects">Effects</button></div>
+        <div id="projectPanel" class="tabpage active">
+          <div class="toolbar">
+            <button id="importBtn" title="Import media (Ctrl+I)">Import</button>
+            <button id="newTitleBtn" title="New title clip">Title</button>
+            <button id="newColorBtn" title="New color matte">Color</button>
+            <input id="mediaSearch" type="search" placeholder="Search">
+          </div>
+          <div id="mediaList" class="list"></div>
+          <div id="mediaEmpty" class="empty">Drop video, audio or image files here<br><span class="hint">or click Import. Everything stays on your computer.</span></div>
+        </div>
+        <div id="effectsPanel" class="tabpage">
+          <div class="fxGroup"><h4>Video Effects</h4><div id="fxList" class="list"></div></div>
+          <div class="fxGroup"><h4>Video Transitions</h4><div id="trList" class="list"></div></div>
+          <p class="hint">Drag an effect onto a clip, or a transition onto a clip edge. Double-click applies to the selected clips.</p>
+        </div>
+      </div>
+
+      <div id="monitors">
+        <div id="sourceMonitor" class="monitor">
+          <div class="monitorHead"><span>Source</span><span id="sourceName" class="dim">(no clip)</span></div>
+          <div class="monitorView"><canvas id="sourceCanvas" class="hidden"></canvas><div id="sourceEmpty" class="empty">Double-click a media item to open it here</div></div>
+          <div class="monitorFoot">
+            <span id="sourceTc" class="tc">00:00:00:00</span>
+            <div class="transport">
+              <button id="srcIn" title="Mark In (I)">{</button>
+              <button id="srcStep-" title="Step back">◀</button>
+              <button id="srcPlay" title="Play/Pause">▶</button>
+              <button id="srcStep+" title="Step forward">▶</button>
+              <button id="srcOut" title="Mark Out (O)">}</button>
+            </div>
+            <button id="srcInsert" title="Insert at playhead (,)">Insert</button>
+            <button id="srcOverwrite" title="Overwrite at playhead (.)">Overwrite</button>
+            <span id="sourceDur" class="tc dim">00:00:00:00</span>
+          </div>
+          <div class="miniScrub"><div id="srcScrub" class="scrub"><div class="inout"></div><div class="head"></div></div></div>
+        </div>
+        <div id="programMonitor" class="monitor">
+          <div class="monitorHead"><span>Program</span><span id="seqInfo" class="dim"></span><div class="spacer"></div>
+            <label class="chk"><input type="checkbox" id="safeMargins"> Safe margins</label>
+            <select id="monitorZoom" title="Monitor zoom"><option value="fit">Fit</option><option value="0.25">25%</option><option value="0.5">50%</option><option value="1">100%</option></select>
+          </div>
+          <div class="monitorView" id="programView"><canvas id="program"></canvas><div id="gizmo" class="hidden"><div class="h tl"></div><div class="h tr"></div><div class="h bl"></div><div class="h br"></div><div class="h rot"></div></div><div id="safeOverlay" class="hidden"></div></div>
+          <div class="monitorFoot">
+            <input id="tcInput" class="tc" value="00:00:00:00" title="Playhead (type a timecode and press Enter)">
+            <div class="transport">
+              <button id="markIn" title="Mark In (I)">{</button>
+              <button id="goStart" title="Go to start (Home)">⏮</button>
+              <button id="stepBack" title="Step back (←)">◀</button>
+              <button id="playBtn" title="Play/Pause (Space)">▶</button>
+              <button id="stepFwd" title="Step forward (→)">▶</button>
+              <button id="goEnd" title="Go to end (End)">⏭</button>
+              <button id="markOut" title="Mark Out (O)">}</button>
+              <button id="loopBtn" title="Loop playback">⟲</button>
+            </div>
+            <div class="meter" title="Master level"><div id="meterBar"></div></div>
+            <span id="seqDur" class="tc dim">00:00:00:00</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="rightPanel" class="panel">
+        <div class="tabs"><button class="tab active">Effect Controls</button></div>
+        <div id="effectControls" class="tabpage active"><div class="empty">Select a clip to edit its motion, opacity, effects and audio.</div></div>
+      </div>
+    </div>
+
+    <div id="bottom">
+      <div id="timeline">
+        <div id="tlToolbar">
+          <div class="tools">
+            <button class="tool active" data-tool="select" title="Selection tool (V)">▲</button>
+            <button class="tool" data-tool="razor" title="Razor tool (C)">✂</button>
+            <button class="tool" data-tool="hand" title="Hand tool (H)">✋</button>
+          </div>
+          <button id="snapBtn" class="toggle active" title="Snap (S)">Snap</button>
+          <button id="linkBtn" class="toggle active" title="Linked selection">Linked</button>
+          <button id="splitBtn" title="Split at playhead (Ctrl+K)">Split</button>
+          <button id="markerBtn" title="Add marker (M)">Marker</button>
+          <button id="addVideoTrack" title="Add video track">+V</button>
+          <button id="addAudioTrack" title="Add audio track">+A</button>
+          <div class="spacer"></div>
+          <span id="tlStatus" class="dim"></span>
+          <label class="zoomLabel">Zoom <input type="range" id="zoom" min="0" max="100" value="40"></label>
+        </div>
+        <div id="tlBody">
+          <div id="tlHeaders"><div class="rulerSpacer"></div><div id="trackHeaders"></div></div>
+          <div id="tlScroll">
+            <div id="tlContent">
+              <canvas id="ruler"></canvas>
+              <div id="tracks"></div>
+              <div id="marquee" class="hidden"></div>
+              <div id="playhead"><div class="phHead"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="statusbar"><span id="status">Ready</span><span class="spacer"></span><span id="hintbar" class="dim">Space play · J/K/L shuttle · I/O in/out · C razor · V select · Ctrl+K split · Del delete · Shift+Del ripple delete · Ctrl+Z undo</span></div>
+  <div id="dropOverlay" class="hidden">Drop files to import</div>
+  <div id="modal" class="hidden"><div id="modalBox"></div></div>
+  <div id="ctxmenu" class="hidden"></div>
+  <input type="file" id="fileInput" multiple accept="video/*,audio/*,image/*,.mkv,.mov,.m4a,.flac" hidden>
+  <input type="file" id="projectInput" accept=".cutroom,.json" hidden>
+</div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
