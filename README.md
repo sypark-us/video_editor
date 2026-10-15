@@ -1,13 +1,17 @@
 # Cutroom
 
 A free, Premiere-style non-linear video editor that runs entirely in the browser. No build step,
-no dependencies, no uploads: open `index.html` (or serve the folder) and edit.
+no dependencies, no uploads.
+
+**Run it:** double-click `start.cmd` (Windows, needs [Node.js](https://nodejs.org)), or serve the folder
+with any static server and open it in Chrome or Edge:
 
 ```
-# optional local server (any static server works)
 node test/serve.mjs 8080        # then open http://localhost:8080/
 # or: python -m http.server 8080 / npx serve .
 ```
+
+Opening `index.html` straight from disk does not work: browsers refuse to load ES modules from `file://`.
 
 Add `?demo` to the URL to open a sample sequence (color mattes, an animated title, a wipe).
 
